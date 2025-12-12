@@ -158,9 +158,33 @@ const RequestedInfo = req.body;
 const result = await AllblodDonationRequest.insertOne(RequestedInfo)
 res.send(result)   
 })
-app.get('/all-dontionrequest',async(req,res)=>{
+// app.get('/all-dontionrequest',async(req,res)=>{
 
-})
+// })
+app.get("/my-blood-donation-requests", async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).send({ message: "email is required" });
+    }
+
+    const result = await AllblodDonationRequest
+      .find({ 
+requesterEmail:email })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+
+
+
+
+
 
 
 
