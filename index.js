@@ -152,7 +152,15 @@ app.get("/regesterDoner", async (req, res) => {
     res.status(500).send({ message: "Server error", error: error.message });
   }
 });
+// Creat Blood donatio request 
+app.post('/CreatedBloadDonation',async(req,res)=>{
+const RequestedInfo = req.body;
+const result = await AllblodDonationRequest.insertOne(RequestedInfo)
+res.send(result)   
+})
+app.get('/all-dontionrequest',async(req,res)=>{
 
+})
 
 
 
