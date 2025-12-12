@@ -107,7 +107,51 @@ app.post("/create-checkout-session", async (req, res) => {
       res.status(500).send({ message: err?.message || "Server error" });
     }
   });
+ allRegisteredDonorInfo Api
+app.post('/regesterDoner',async(req,res)=>{
+const userInfo = req.body;
+const result = await allRegisteredDonorInfoCollection.insertOne(userInfo)
+res.send(result)
+})
+// get all  user
+app.get("/regesterDoner", async (req, res) => {
+  try {
+    const { status = "all", search = "", page = 1, limit = 10 } = req.query;
 
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+
+    const query = {};
+
+    if (status !== "all") query.status = status;
+
+    if (search?.trim()) {
+      query.$or = [
+        { name: { $regex: search.trim(), $options: "i" } },
+        { email: { $regex: search.trim(), $options: "i" } },
+      ];
+    }
+
+    const total = await allRegisteredDonorInfoCollection.countDocuments(query);
+
+    const result = await allRegisteredDonorInfoCollection
+      .find(query)
+      .sort({ _id: -1 }) // ✅ newest first (show first)
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum)
+      .toArray();
+
+    res.send({
+      result,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum),
+    });
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
 
 
 
