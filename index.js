@@ -287,6 +287,40 @@ app.patch('/my-blood-donation-requests-to-processing/:id', async (req, res) => {
     res.status(500).json({ message: 'Internal server error' });
   }
 });
+app.patch("/blood-donation-requests/:id/status", async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  try {
+    const allowedStatuses = ["done", "cancelled"]; 
+
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({ message: "Invalid status value" });
+    }
+
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = { $set: { status, updatedAt: new Date() } };
+
+    const result = await AllblodDonationRequest.updateOne(
+      filter,
+      updateDoc
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "Request not found" });
+    }
+
+    const updatedRequest = await AllblodDonationRequest.findOne(filter);
+
+    return res.json({
+      message: "Blood donation request status updated successfully",
+      request: updatedRequest,
+    });
+  } catch (err) {
+    console.error("Error updating blood donation request status:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
 
 
 
