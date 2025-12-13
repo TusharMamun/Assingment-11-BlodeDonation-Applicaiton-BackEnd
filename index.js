@@ -1,60 +1,14 @@
-// index.js
 const express = require("express");
 
 const cors = require("cors");
 require("dotenv").config();
-
-const { MongoClient, ServerApiVersion, ObjectId, Admin } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = process.env.PORT || 5000;
 const app = express();
 const stripe = require("stripe")(process.env.STRIP_SECRET_KEY);
-
 // middleware
 app.use(cors());
 app.use(express.json());
-const admin = require("firebase-admin");
-const serviceAccount = require("./firabaseSkd.json");
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
-
-
-
-// verify middleware
-const verifyFirebaseToken = async (req, res, next) => {
-  const authHeader = req.headers.authorization; // 
-
-
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).send({ message: "unauthorized access" });
-  }
-
-  const token = authHeader.split(" ")[1];
-  console.log(token)
-  try {
-    const decoded = await admin.auth().verifyIdToken(token)
-    console.log(decoded)
-    req.decoded_email= decoded.email; // decoded.email, decoded.uid
-    next();
-// await admin.auth().verifyIdToken(token);
-  } 
-  catch (err)
-   {
-    console.log(err)
-    return res.status(403).send({ message: "invalid token" });
-  }
-};
-
-
-
-
-
-
-
-
-
-
 // data base Connection with mondodb
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@mongodb-digitalshop.vq7pmww.mongodb.net/?appName=Mongodb-DigitalShop`;
 
@@ -136,7 +90,7 @@ const AllblodDonationRequest = db.collection("BlodeDonationRequest")
   });
 
   // ✅ Optional: mark payment success (PATCH) for DB update
-  app.patch("/payment-success",verifyFirebaseToken, async (req, res) => {
+  app.patch("/payment-success", async (req, res) => {
     try {
       const sessionId = req.query.session_id;
       if (!sessionId) return res.status(400).send({ message: "session_id required" });
@@ -163,19 +117,80 @@ const AllblodDonationRequest = db.collection("BlodeDonationRequest")
 
 
 // Creat  request Data
-app.post('/CreatedBloadDonation',async(req,res)=>{
-const RequestedInfo = req.body;
-const result = await AllblodDonationRequest.insertOne(RequestedInfo)
-res.send(result)   
-})
-// app.get('/all-dontionrequest',,async(req,res)=>{
+app.post("/CreatedBloadDonation", async (req, res) => {
+  try {
+    const data = req.body || {};
 
-// })
+    const requiredFields = [
+      "requesterName",
+      "requesterEmail",
+      "recipientName",
+      "recipientDistrict",
+      "recipientUpazila",
+      "hospitalName",
+      "fullAddress",
+      "bloodGroup",
+      "donationDate",
+      "donationTime",
+      "requestMessage",
+    ];
+
+    const missing = requiredFields.filter((f) => !String(data[f] || "").trim());
+    if (missing.length) {
+      return res.status(400).send({
+        message: `Missing required fields: ${missing.join(", ")}`,
+      });
+    }
+
+    if (String(data.requestMessage).trim().length < 10) {
+      return res.status(400).send({ message: "Write at least 10 characters" });
+    }
+
+    const allowedBloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+    if (!allowedBloodGroups.includes(data.bloodGroup)) {
+      return res.status(400).send({ message: "Invalid blood group" });
+    }
+
+    const email = String(data.requesterEmail).toLowerCase();
+
+    const user = await allRegisteredDonorInfoCollection.findOne({ email });
+    if (!user) return res.status(404).send({ message: "User not found" });
+
+    if (String(user?.status || "active").toLowerCase() === "blocked") {
+      return res.status(403).send({
+        message: "Blocked user is not able to create any donation request",
+      });
+    }
+
+    const doc = {
+      requesterName: String(data.requesterName).trim(),
+      requesterEmail: email,
+      recipientName: String(data.recipientName).trim(),
+      recipientDistrict: String(data.recipientDistrict).trim(),
+      recipientUpazila: String(data.recipientUpazila).trim(),
+      hospitalName: String(data.hospitalName).trim(),
+      fullAddress: String(data.fullAddress).trim(),
+      bloodGroup: data.bloodGroup,
+      donationDate: data.donationDate,
+      donationTime: data.donationTime,
+      requestMessage: String(data.requestMessage).trim(),
+      status: "pending",
+      createdAt: new Date(),
+    };
+
+    const result = await AllblodDonationRequest.insertOne(doc);
+    res.send({ acknowledged: true, insertedId: result.insertedId });
+  } catch (error) {
+    console.error("Create donation request error:", error);
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+
 
 
 
 // get All request data  FOR PENDIN REQUEST
-app.get("/donation-requests",verifyFirebaseToken, async (req, res) => {
+app.get("/donation-requests", async (req, res) => {
   try {
     const { status } = req.query;
 
@@ -193,7 +208,7 @@ app.get("/donation-requests",verifyFirebaseToken, async (req, res) => {
   }
 });
 
-app.get("/blood-donation-requests",verifyFirebaseToken  , async (req, res) => {
+app.get("/blood-donation-requests", async (req, res) => {
   try {
     const { status, bloodGroup, search, page = 1, limit = 10 } = req.query;
 
@@ -201,22 +216,13 @@ app.get("/blood-donation-requests",verifyFirebaseToken  , async (req, res) => {
     if (status) query.status = status;
     if (bloodGroup) query.bloodGroup = bloodGroup;
 
-    if (search && search.trim()) {
-      const s = search.trim();
-
+    if (search) {
       query.$or = [
-        // ✅ name search
-        { requesterName: { $regex: s, $options: "i" } },
-        { recipientName: { $regex: s, $options: "i" } },
-
-        // ✅ email + others
-        { requesterEmail: { $regex: s, $options: "i" } },
-        { hospitalName: { $regex: s, $options: "i" } },
-        { recipientDistrict: { $regex: s, $options: "i" } },
-        { recipientUpazila: { $regex: s, $options: "i" } },
-        { fullAddress: { $regex: s, $options: "i" } },
-        { bloodGroup: { $regex: s, $options: "i" } },
-        { status: { $regex: s, $options: "i" } },
+        { patientName: { $regex: search, $options: "i" } },
+        { hospitalName: { $regex: search, $options: "i" } },
+        { location: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+        { phone: { $regex: search, $options: "i" } },
       ];
     }
 
@@ -226,7 +232,7 @@ app.get("/blood-donation-requests",verifyFirebaseToken  , async (req, res) => {
 
     const [result, total] = await Promise.all([
       AllblodDonationRequest.find(query)
-        .sort({ createdAt: -1 }) // যদি createdAt না থাকে -> .sort({ _id: -1 })
+        .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum)
         .toArray(),
@@ -246,7 +252,7 @@ app.get("/blood-donation-requests",verifyFirebaseToken  , async (req, res) => {
 });
 
 // Get Donattion details page
-
+const { ObjectId } = require("mongodb");
 
 app.get("/blood-donation-requests-details/:id", async (req, res) => {
   try {
@@ -268,26 +274,6 @@ app.get("/blood-donation-requests-details/:id", async (req, res) => {
 
 
 
-
-
-app.get("/my-blood-donation-latest-three-request",verifyFirebaseToken, async (req, res) => {
-  try {
-    const { email } = req.query;
-    if (!email) return res.status(400).send({ message: "email is required" });
-if (email !== req.decoded_email) {
-  return res.status(403).send({ message: "forbidden access" });
-}
-    const result = await AllblodDonationRequest
-      .find({ requesterEmail: email })
-      .sort({ createdAt: -1 })   // latest first
-      .limit(3)                  // ✅ only 3
-      .toArray();
-
-    res.send(result); // ✅ only latest 3 data
-  } catch (error) {
-    res.status(500).send({ message: "Server error", error: error.message });
-  }
-});
 
 
 
@@ -339,137 +325,7 @@ app.get("/regesterDoner", async (req, res) => {
     res.status(500).send({ message: "Server error", error: error.message });
   }
 });
-// ============================
-// ✅ MY DONATION REQUESTS (Donor)
-// GET /my-blood-donation-requests?email=...&status=all&page=1&limit=10&search=...
-// ============================
-app.get("/my-blood-donation-requests",verifyFirebaseToken, async (req, res) => {
-  try {
-    const { email, status = "all", search = "", page = 1, limit = 10 } = req.query;
 
-    if (!email) return res.status(400).send({ message: "email is required" });
-if (email !== req.decoded_email) {
-  return res.status(403).send({ message: "forbidden access" });
-}
-    const pageNum = parseInt(page, 10);
-    const limitNum = parseInt(limit, 10);
-
-    const query = { requesterEmail: email };
-
-    // ✅ status filter
-    if (status !== "all") query.status = status; // pending|inprogress|done|canceled
-
-    // ✅ search
-    if (search?.trim()) {
-      const s = search.trim();
-      query.$or = [
-        { patientName: { $regex: s, $options: "i" } },
-        { hospitalName: { $regex: s, $options: "i" } },
-        { location: { $regex: s, $options: "i" } },
-        { bloodGroup: { $regex: s, $options: "i" } },
-        { phone: { $regex: s, $options: "i" } },
-      ];
-    }
-
-    const total = await AllblodDonationRequest.countDocuments(query);
-
-    const result = await AllblodDonationRequest
-      .find(query)
-      .sort({ createdAt: -1 }) // newest first
-      .skip((pageNum - 1) * limitNum)
-      .limit(limitNum)
-      .toArray();
-
-    res.send({
-      result,
-      total,
-      page: pageNum,
-      limit: limitNum,
-      totalPages: Math.ceil(total / limitNum),
-    });
-  } catch (error) {
-    res.status(500).send({ message: "Server error", error: error.message });
-  }
-});
-
-// ============================
-// ✅ DELETE MY DONATION REQUEST (Donor)
-// DELETE /my-blood-donation-requests/:id?email=user@email.com
-// ============================
-
-
-// GET: My donation requests
-app.get("/my-blood-donation-requests",verifyFirebaseToken, async (req, res) => {
-  try {
-    const { email, status = "all", search = "", page = 1, limit = 10 } = req.query;
-
-    if (!email) return res.status(400).send({ message: "email is required" });
-if (email !== req.decoded_email) {
-  return res.status(403).send({ message: "forbidden access" });
-}
-    const query = { requesterEmail: email };
-
-    if (status !== "all") query.status = status;
-
-    const q = search.trim();
-    if (q) {
-      query.$or = [
-        { recipientName: { $regex: q, $options: "i" } },
-        { hospitalName: { $regex: q, $options: "i" } },
-        { recipientDistrict: { $regex: q, $options: "i" } },
-        { recipientUpazila: { $regex: q, $options: "i" } },
-        { fullAddress: { $regex: q, $options: "i" } },
-        { bloodGroup: { $regex: q, $options: "i" } },
-        { status: { $regex: q, $options: "i" } },
-      ];
-    }
-
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
-    const skip = (pageNum - 1) * limitNum;
-
-    const total = await AllblodDonationRequest.countDocuments(query);
-
-    const result = await AllblodDonationRequest.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum); // ✅ mongoose returns array
-
-    res.send({
-      result,
-      total,
-      page: pageNum,
-      limit: limitNum,
-      totalPages: Math.ceil(total / limitNum),
-    });
-  } catch (error) {
-    res.status(500).send({ message: "Server error", error: error.message });
-  }
-});
-
-
-
-// DELETE: only owner can delete (ownership by requesterEmail)
-app.delete("/my-blood-donation-requests/:id",verifyFirebaseToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const result = await AllblodDonationRequest.deleteOne({
-      _id: new ObjectId(id),
-    });
-
-    if (result.deletedCount === 0) {
-      return res.status(404).send({ message: "Donation request not found" });
-    }
-    if (email !== req.decoded_email) {
-  return res.status(403).send({ message: "forbidden access" });
-}
-
-    res.send({ success: true, deletedCount: result.deletedCount });
-  } catch (error) {
-    res.status(500).send({ message: "Server error", error: error.message });
-  }
-});
 // update stutus
 app.patch("/update-status/:id", async (req, res) => {
   try {
@@ -500,10 +356,7 @@ app.patch("/update-status/:id", async (req, res) => {
 
 
 
-app.get('/profile/:email',verifyFirebaseToken, async(req,res)=>{
-if (email !== req.decoded_email) {
-  return res.status(403).send({ message: "forbidden access" });
-}
+app.get('/profile/:email', async(req,res)=>{
   const email = req.params.email
   const result =await allRegisteredDonorInfoCollection.findOne({email})
 res.send(result)
@@ -512,16 +365,13 @@ res.send(result)
 
 
 
-app.put("/update/profile",verifyFirebaseToken, async (req, res) => {
+app.put("/update/profile", async (req, res) => {
   try {
     const { email, name, district, upazila, photoUrl } = req.body;
 
     if (!email) {
       return res.status(400).send({ message: "email is required" });
     }
-    if (email !== req.decoded_email) {
-  return res.status(403).send({ message: "forbidden access" });
-}
 
     const filter = { email };
 
@@ -554,12 +404,8 @@ app.put("/update/profile",verifyFirebaseToken, async (req, res) => {
 // getUserRoll 
 
 
-app.get('/regesterDoner/role/:email',verifyFirebaseToken, async(req,res)=>{
+app.get('/regesterDoner/role/:email', async(req,res)=>{
   const email = req.params.email
-  if (email !== req.decoded_email) {
-  return res.status(403).send({ message: "forbidden access" });
-}
-
   const result =await allRegisteredDonorInfoCollection.findOne({email})
 res.send(({role:result?.role}))
 })
@@ -567,7 +413,7 @@ res.send(({role:result?.role}))
 
 
 
-app.patch("/users/:id/role",verifyFirebaseToken, async (req, res) => {
+app.patch("/users/:id/role", async (req, res) => {
   try {
     const { id } = req.params;
     const { role } = req.body; // donor | volunteer | admin
@@ -575,10 +421,6 @@ app.patch("/users/:id/role",verifyFirebaseToken, async (req, res) => {
     if (!["donor", "volunteer", "admin"].includes(role)) {
       return res.status(400).send({ message: "Invalid role" });
     }
-
-  if (email !== req.decoded_email) {
-  return res.status(403).send({ message: "forbidden access" });
-}
 
     const result = await allRegisteredDonorInfoCollection.updateOne(
       { _id: new ObjectId(id) },
@@ -627,155 +469,331 @@ app.patch("/users/:id/status", async (req, res) => {
   }
 });
 
-app.patch("/blood-donation-requests/:id/status",verifyFirebaseToken, async (req, res) => {
-  const { id } = req.params;
-  const { status } = req.body;
-  if (email !== req.decoded_email) {
-  return res.status(403).send({ message: "forbidden access" });
-}
+// Mydonation for my donation page
 
+
+app.get("/donation-requests/:id", async (req, res) => {
   try {
-    const allowedStatuses = ["done", "cancelled"]; 
-
-    if (!allowedStatuses.includes(status)) {
-      return res.status(400).json({ message: "Invalid status value" });
-    }
-
-    const filter = { _id: new ObjectId(id) };
-    const updateDoc = { $set: { status, updatedAt: new Date() } };
-
-    const result = await AllblodDonationRequest.updateOne(
-      filter,
-      updateDoc
-    );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ message: "Request not found" });
-    }
-
-    const updatedRequest = await AllblodDonationRequest.findOne(filter);
-
-    return res.json({
-      message: "Blood donation request status updated successfully",
-      request: updatedRequest,
-    });
-  } catch (err) {
-    console.error("Error updating blood donation request status:", err);
-    return res.status(500).json({ message: "Internal server error" });
+    const doc = await AllblodDonationRequest.findOne({ _id: new ObjectId(req.params.id) });
+    if (!doc) return res.status(404).send({ message: "Request not found" });
+    res.send(doc);
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error: error.message });
   }
 });
-app.patch("/blood-donation-requests-updateData/:id",verifyFirebaseToken, async (req, res) => {
-  const { id } = req.params;
-if (email !== req.decoded_email) {
-  return res.status(403).send({ message: "forbidden access" });
-}
-  const {
-    requesterName,
-    requesterEmail,
-    recipientName,
-    recipientDistrict,
-    recipientUpazila,
-    hospitalName,
-    fullAddress,
-    bloodGroup,
-    donationDate,
-    donationTime,
-    requestMessage,
-    // status  // 👈 not needed if your form doesn't send it
-  } = req.body;
 
+
+
+
+
+app.get("/my-blood-donation-requests", async (req, res) => {
   try {
-    // Basic validation (optional but good)
-    if (
-      !requesterName ||
-      !requesterEmail ||
-      !recipientName ||
-      !recipientDistrict ||
-      !recipientUpazila ||
-      !hospitalName ||
-      !fullAddress ||
-      !bloodGroup ||
-      !donationDate ||
-      !donationTime ||
-      !requestMessage
-    ) {
-      return res
-        .status(400)
-        .json({ message: "All required fields must be provided" });
+    const { email, status = "pending", search = "", page = 1, limit = 10 } = req.query;
+    if (!email) return res.status(400).send({ message: "email is required" });
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.max(1, parseInt(limit, 10) || 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const query = { requesterEmail: String(email).toLowerCase() };
+
+    if (status && status !== "all") query.status = String(status).toLowerCase();
+
+    const q = String(search).trim();
+    if (q) {
+      query.$or = [
+        { recipientName: { $regex: q, $options: "i" } },
+        { hospitalName: { $regex: q, $options: "i" } },
+        { recipientDistrict: { $regex: q, $options: "i" } },
+        { recipientUpazila: { $regex: q, $options: "i" } },
+        { bloodGroup: { $regex: q, $options: "i" } },
+      ];
     }
 
-    const filter = { _id: new ObjectId(id) };
+    const total = await AllblodDonationRequest.countDocuments(query);
 
+    const result = await AllblodDonationRequest
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .toArray();
+
+    res.send({
+      result,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.max(1, Math.ceil(total / limitNum)),
+    });
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+app.get("/donation-requests/:id", async (req, res) => {
+  try {
+    const doc = await AllblodDonationRequest.findOne({ _id: new ObjectId(req.params.id) });
+    if (!doc) return res.status(404).send({ message: "Request not found" });
+    res.send(doc);
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+app.patch("/my-blood-donation-requests/:id", async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) return res.status(400).send({ message: "email is required" });
+
+    const id = req.params.id;
+
+    const existing = await AllblodDonationRequest.findOne({ _id: new ObjectId(id) });
+    if (!existing) return res.status(404).send({ message: "Request not found" });
+
+    if (String(existing.requesterEmail).toLowerCase() !== String(email).toLowerCase()) {
+      return res.status(403).send({ message: "Not allowed" });
+    }
+
+    if (String(existing.status || "").toLowerCase() !== "pending") {
+      return res.status(400).send({ message: "Only pending requests can be edited" });
+    }
+
+    const b = req.body || {};
     const updateDoc = {
       $set: {
-        requesterName,
-        requesterEmail,
-        recipientName,
-        recipientDistrict,  // 👈 district name (you mapped from id in frontend)
-        recipientUpazila,
-        hospitalName,
-        fullAddress,
-        bloodGroup,
-        donationDate,       // string date (e.g. "2025-12-10")
-        donationTime,       // string time (e.g. "14:30")
-        requestMessage,
+        recipientName: b.recipientName,
+        recipientDistrict: b.recipientDistrict,
+        recipientUpazila: b.recipientUpazila,
+        hospitalName: b.hospitalName,
+        fullAddress: b.fullAddress,
+        bloodGroup: b.bloodGroup,
+        donationDate: b.donationDate,
+        donationTime: b.donationTime,
+        requestMessage: b.requestMessage,
         updatedAt: new Date(),
-        // ❌ no status here -> existing status in DB stays same
+      },
+    };
+
+    const result = await AllblodDonationRequest.updateOne({ _id: new ObjectId(id) }, updateDoc);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+app.delete("/my-blood-donation-requests/:id", async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) return res.status(400).send({ message: "email is required" });
+
+    const id = req.params.id;
+
+    const existing = await AllblodDonationRequest.findOne({ _id: new ObjectId(id) });
+    if (!existing) return res.status(404).send({ message: "Request not found" });
+
+    if (String(existing.requesterEmail).toLowerCase() !== String(email).toLowerCase()) {
+      return res.status(403).send({ message: "Not allowed" });
+    }
+
+    if (String(existing.status || "").toLowerCase() !== "pending") {
+      return res.status(400).send({ message: "Only pending requests can be deleted" });
+    }
+
+    const result = await AllblodDonationRequest.deleteOne({ _id: new ObjectId(id) });
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+
+
+
+
+
+
+
+
+app.get("/latest-3-my-blood-donation-requests", async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) return res.status(400).send({ message: "email is required" });
+
+    const result = await AllblodDonationRequest
+      .find({ requesterEmail: String(email).toLowerCase() })
+      .sort({ createdAt: -1 })
+      .limit(3)
+      .toArray();
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+
+app.get("/my-blood-donation-requests", async (req, res) => {
+  try {
+    const { email, status = "pending", search = "", page = 1, limit = 10 } = req.query;
+    if (!email) return res.status(400).send({ message: "email is required" });
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.max(1, parseInt(limit, 10) || 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const query = { requesterEmail: String(email).toLowerCase() };
+
+    if (status && status !== "all") query.status = status;
+
+    const q = String(search).trim();
+    if (q) {
+      query.$or = [
+        { recipientName: { $regex: q, $options: "i" } },
+        { hospitalName: { $regex: q, $options: "i" } },
+        { recipientDistrict: { $regex: q, $options: "i" } },
+        { recipientUpazila: { $regex: q, $options: "i" } },
+        { bloodGroup: { $regex: q, $options: "i" } },
+      ];
+    }
+
+    const total = await AllblodDonationRequest.countDocuments(query);
+
+    const result = await AllblodDonationRequest
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .toArray();
+
+    res.send({
+      result,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.max(1, Math.ceil(total / limitNum)),
+    });
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+
+
+app.get("/donation-requests/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const doc = await AllblodDonationRequest.findOne({ _id: new ObjectId(id) });
+    if (!doc) return res.status(404).send({ message: "Request not found" });
+    res.send(doc);
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+app.patch("/my-blood-donation-requests/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { email } = req.query;
+    if (!email) return res.status(400).send({ message: "email is required" });
+
+    const existing = await AllblodDonationRequest.findOne({ _id: new ObjectId(id) });
+    if (!existing) return res.status(404).send({ message: "Request not found" });
+
+    if (String(existing.requesterEmail).toLowerCase() !== String(email).toLowerCase()) {
+      return res.status(403).send({ message: "Not allowed" });
+    }
+
+    if (String(existing.status).toLowerCase() !== "pending") {
+      return res.status(400).send({ message: "Only pending requests can be edited" });
+    }
+
+    const body = req.body || {};
+    const updateDoc = {
+      $set: {
+        recipientName: body.recipientName,
+        recipientDistrict: body.recipientDistrict,
+        recipientUpazila: body.recipientUpazila,
+        hospitalName: body.hospitalName,
+        fullAddress: body.fullAddress,
+        bloodGroup: body.bloodGroup,
+        donationDate: body.donationDate,
+        donationTime: body.donationTime,
+        requestMessage: body.requestMessage,
+        updatedAt: new Date(),
       },
     };
 
     const result = await AllblodDonationRequest.updateOne(
-      filter,
+      { _id: new ObjectId(id) },
       updateDoc
     );
 
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ message: "Request not found" });
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+app.delete("/my-blood-donation-requests/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { email } = req.query;
+    if (!email) return res.status(400).send({ message: "email is required" });
+
+    const existing = await AllblodDonationRequest.findOne({ _id: new ObjectId(id) });
+    if (!existing) return res.status(404).send({ message: "Request not found" });
+
+    if (String(existing.requesterEmail).toLowerCase() !== String(email).toLowerCase()) {
+      return res.status(403).send({ message: "Not allowed" });
     }
 
-    const updatedRequest = await AllblodDonationRequest.findOne(
-      filter
+    if (String(existing.status).toLowerCase() !== "pending") {
+      return res.status(400).send({ message: "Only pending requests can be deleted" });
+    }
+
+    const result = await AllblodDonationRequest.deleteOne({ _id: new ObjectId(id) });
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+app.patch("/my-blood-donation-requests/:id/status", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { email } = req.query;
+    const { status } = req.body;
+
+    if (!email) return res.status(400).send({ message: "email is required" });
+    if (!status) return res.status(400).send({ message: "status is required" });
+
+    const next = String(status).toLowerCase();
+    const allowed = ["pending", "inprogress", "done", "canceled"];
+    if (!allowed.includes(next)) {
+      return res.status(400).send({ message: "Invalid status" });
+    }
+
+    const existing = await AllblodDonationRequest.findOne({ _id: new ObjectId(id) });
+    if (!existing) return res.status(404).send({ message: "Request not found" });
+
+    // owner check
+    if (String(existing.requesterEmail).toLowerCase() !== String(email).toLowerCase()) {
+      return res.status(403).send({ message: "Not allowed" });
+    }
+
+    const current = String(existing.status || "").toLowerCase();
+
+    // ✅ rules: from inprogress -> done/canceled only
+    if (current !== "inprogress") {
+      return res.status(400).send({ message: "Only inprogress requests can change status" });
+    }
+
+    if (!(next === "done" || next === "canceled")) {
+      return res.status(400).send({ message: "Inprogress can only become done or canceled" });
+    }
+
+    const result = await AllblodDonationRequest.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status: next, updatedAt: new Date() } }
     );
 
-    return res.json({
-      message: "Blood donation request updated successfully",
-      request: updatedRequest,
-    });
-  } catch (err) {
-    console.error("Error updating blood donation request:", err);
-    return res.status(500).json({ message: "Internal server error" });
-  }
-});
-app.patch('/my-blood-donation-requests-to-processing/:id', verifyFirebaseToken, async (req, res) => {
-  const id = req.params.id;
-  if (email !== req.decoded_email) {
-  return res.status(403).send({ message: "forbidden access" });
-}
-
-  if (!ObjectId.isValid(id)) {
-    return res.status(400).json({ message: 'Invalid request ID' });
-  }
-
-  try {
-
-    const result = await AllblodDonationRequest
-      .updateOne(
-        { _id: new ObjectId(id), status: 'inprogress' }, // only update if status is 'inprogress'
-        { $set: { status: 'pending', updatedAt: new Date() } }
-      );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ message: 'Request not found or not in progress' });
-    }
-
-    res.status(200).json({ message: 'Status updated to pending' });
+    res.send(result);
   } catch (error) {
-    console.error('Error updating request status:', error);
-    res.status(500).json({ message: 'Internal server error' });
+    res.status(500).send({ message: "Server error", error: error.message });
   }
 });
-
-
 
 
 
