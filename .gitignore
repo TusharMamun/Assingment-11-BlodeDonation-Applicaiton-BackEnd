@@ -1,6 +1,10 @@
-node_modules/
+# env files
 .env
 .env.*
+node_modules/
+# keep example env
 !.env.example
+
+# firebase/admin sdk key
 firabaseSkd.json/
-simplecode.js/
+firabaseSkd.json
