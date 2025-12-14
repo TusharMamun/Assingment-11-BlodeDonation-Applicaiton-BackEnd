@@ -6,9 +6,50 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = process.env.PORT || 5000;
 const app = express();
 const stripe = require("stripe")(process.env.STRIP_SECRET_KEY);
+const admin = require("firebase-admin");
+const serviceAccount =require("./firabaseSkd.json")
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+
 // middleware
 app.use(cors());
 app.use(express.json());
+// Validation MIdelwer
+
+
+const VerifyFbToken=async(req,res,next)=>{
+
+const token =req.headers.authorization
+if(!token){
+  return res.status(401).send({ message: "Unauthorized access"})
+}
+try {
+const idToken = token.split(' ')[1];
+const decoded = await admin.auth().verifyIdToken(idToken)
+req.decoded_email = decoded.email
+console.log(decoded)
+} catch (error) {
+  return res.status(401).send({message:"Unauthorized access"})
+}
+
+
+
+
+
+next()
+}
+
+
+
+
+
+
+
+
+
+
 // data base Connection with mondodb
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@mongodb-digitalshop.vq7pmww.mongodb.net/?appName=Mongodb-DigitalShop`;
 
@@ -147,15 +188,25 @@ app.post("/CreatedBloadDonation", async (req, res) => {
     }
 
     const allowedBloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
-    if (!allowedBloodGroups.includes(data.bloodGroup)) {
+    if (!allowedBloodGroups.includes(String(data.bloodGroup).trim())) {
       return res.status(400).send({ message: "Invalid blood group" });
     }
 
-    const email = String(data.requesterEmail).toLowerCase();
+    // ✅ normalize email
+    const email = String(data.requesterEmail || "").trim().toLowerCase();
 
-    const user = await allRegisteredDonorInfoCollection.findOne({ email });
-    if (!user) return res.status(404).send({ message: "User not found" });
+    // ✅ case-insensitive find user
+    const user = await allRegisteredDonorInfoCollection.findOne({
+      email: { $regex: `^${email}$`, $options: "i" },
+    });
 
+    if (!user) {
+      return res.status(404).send({
+        message: "User not found. Please register first.",
+      });
+    }
+
+    // ✅ blocked user can’t create request
     if (String(user?.status || "active").toLowerCase() === "blocked") {
       return res.status(403).send({
         message: "Blocked user is not able to create any donation request",
@@ -170,16 +221,21 @@ app.post("/CreatedBloadDonation", async (req, res) => {
       recipientUpazila: String(data.recipientUpazila).trim(),
       hospitalName: String(data.hospitalName).trim(),
       fullAddress: String(data.fullAddress).trim(),
-      bloodGroup: data.bloodGroup,
-      donationDate: data.donationDate,
-      donationTime: data.donationTime,
+      bloodGroup: String(data.bloodGroup).trim(),
+      donationDate: String(data.donationDate).trim(),
+      donationTime: String(data.donationTime).trim(),
       requestMessage: String(data.requestMessage).trim(),
       status: "pending",
       createdAt: new Date(),
     };
 
     const result = await AllblodDonationRequest.insertOne(doc);
-    res.send({ acknowledged: true, insertedId: result.insertedId });
+
+    res.send({
+      success: true,
+      message: "Donation request created successfully",
+      insertedId: result.insertedId,
+    });
   } catch (error) {
     console.error("Create donation request error:", error);
     res.status(500).send({ message: "Server error", error: error.message });
@@ -190,7 +246,8 @@ app.post("/CreatedBloadDonation", async (req, res) => {
 
 
 // get All request data  FOR PENDIN REQUEST
-app.get("/donation-requests", async (req, res) => {
+app.get("/donation-requests",VerifyFbToken, async (req, res) => {
+// console.log(req.headers)
   try {
     const { status } = req.query;
 
@@ -208,7 +265,7 @@ app.get("/donation-requests", async (req, res) => {
   }
 });
 
-app.get("/blood-donation-requests", async (req, res) => {
+app.get("/blood-donation-requests",VerifyFbToken, async (req, res) => {
   try {
     const { status, bloodGroup, search, page = 1, limit = 10 } = req.query;
 
@@ -252,9 +309,8 @@ app.get("/blood-donation-requests", async (req, res) => {
 });
 
 // Get Donattion details page
-const { ObjectId } = require("mongodb");
 
-app.get("/blood-donation-requests-details/:id", async (req, res) => {
+app.get("/blood-donation-requests-details/:id",VerifyFbToken, async (req, res) => {
   try {
     const result = await AllblodDonationRequest.findOne({
       _id: new ObjectId(req.params.id), // ✅ Correct param name
@@ -272,22 +328,13 @@ app.get("/blood-donation-requests-details/:id", async (req, res) => {
 });
 
 
-
-
-
-
-
-
-
-
-// allRegisteredDonorInfo Api
 app.post('/regesterDoner',async(req,res)=>{
 const userInfo = req.body;
 const result = await allRegisteredDonorInfoCollection.insertOne(userInfo)
 res.send(result)
 })
 // get all  user
-app.get("/regesterDoner", async (req, res) => {
+app.get("/regesterDoner",VerifyFbToken, async (req, res) => {
   try {
     const { status = "all", search = "", page = 1, limit = 10 } = req.query;
 
@@ -356,8 +403,9 @@ app.patch("/update-status/:id", async (req, res) => {
 
 
 
-app.get('/profile/:email', async(req,res)=>{
+app.get('/profile/:email',VerifyFbToken, async(req,res)=>{
   const email = req.params.email
+
   const result =await allRegisteredDonorInfoCollection.findOne({email})
 res.send(result)
 })
@@ -365,7 +413,7 @@ res.send(result)
 
 
 
-app.put("/update/profile", async (req, res) => {
+app.put("/update/profile", VerifyFbToken,async (req, res) => {
   try {
     const { email, name, district, upazila, photoUrl } = req.body;
 
@@ -486,11 +534,15 @@ app.get("/donation-requests/:id", async (req, res) => {
 
 
 
-app.get("/my-blood-donation-requests", async (req, res) => {
+app.get("/my-blood-donation-requests",VerifyFbToken, async (req, res) => {
   try {
     const { email, status = "pending", search = "", page = 1, limit = 10 } = req.query;
     if (!email) return res.status(400).send({ message: "email is required" });
-
+if (email !== req.decoded_email) {
+  return res.status(403).send({
+    message: "Forbidden access: You are not allowed to access this resource.",
+  });
+}
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.max(1, parseInt(limit, 10) || 10);
     const skip = (pageNum - 1) * limitNum;
@@ -530,7 +582,7 @@ app.get("/my-blood-donation-requests", async (req, res) => {
     res.status(500).send({ message: "Server error", error: error.message });
   }
 });
-app.get("/donation-requests/:id", async (req, res) => {
+app.get("/donation-requests/:id",VerifyFbToken, async (req, res) => {
   try {
     const doc = await AllblodDonationRequest.findOne({ _id: new ObjectId(req.params.id) });
     if (!doc) return res.status(404).send({ message: "Request not found" });
@@ -539,24 +591,49 @@ app.get("/donation-requests/:id", async (req, res) => {
     res.status(500).send({ message: "Server error", error: error.message });
   }
 });
-app.patch("/my-blood-donation-requests/:id", async (req, res) => {
+app.patch("/my-blood-donation-requests/:id", VerifyFbToken, async (req, res) => {
   try {
     const { email } = req.query;
-    if (!email) return res.status(400).send({ message: "email is required" });
 
-    const id = req.params.id;
-
-    const existing = await AllblodDonationRequest.findOne({ _id: new ObjectId(id) });
-    if (!existing) return res.status(404).send({ message: "Request not found" });
-
-    if (String(existing.requesterEmail).toLowerCase() !== String(email).toLowerCase()) {
-      return res.status(403).send({ message: "Not allowed" });
+    // ✅ 1) email required
+    if (!email) {
+      return res.status(400).send({ message: "email is required" });
     }
 
+    // ✅ 2) token email must match query email
+    if (String(email).toLowerCase() !== String(req.decoded_email).toLowerCase()) {
+      return res.status(403).send({
+        message: "Forbidden access: You are not allowed to access this resource.",
+      });
+    }
+
+    const { id } = req.params;
+
+    // ✅ 3) validate id
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid request ID" });
+    }
+
+    // ✅ 4) find existing
+    const existing = await AllblodDonationRequest.findOne({ _id: new ObjectId(id) });
+    if (!existing) {
+      return res.status(404).send({ message: "Request not found" });
+    }
+
+    // ✅ 5) ensure owner
+    if (
+      String(existing.requesterEmail || "").toLowerCase() !==
+      String(email).toLowerCase()
+    ) {
+      return res.status(403).send({ message: "Forbidden: Not allowed" });
+    }
+
+    // ✅ 6) only pending can edit
     if (String(existing.status || "").toLowerCase() !== "pending") {
       return res.status(400).send({ message: "Only pending requests can be edited" });
     }
 
+    // ✅ 7) update fields
     const b = req.body || {};
     const updateDoc = {
       $set: {
@@ -573,33 +650,317 @@ app.patch("/my-blood-donation-requests/:id", async (req, res) => {
       },
     };
 
-    const result = await AllblodDonationRequest.updateOne({ _id: new ObjectId(id) }, updateDoc);
-    res.send(result);
+    const result = await AllblodDonationRequest.updateOne(
+      { _id: new ObjectId(id) },
+      updateDoc
+    );
+
+    res.send({ success: true, result });
   } catch (error) {
+    console.error("PATCH /my-blood-donation-requests/:id error:", error);
     res.status(500).send({ message: "Server error", error: error.message });
   }
 });
-app.delete("/my-blood-donation-requests/:id", async (req, res) => {
+
+app.delete("/my-blood-donation-requests/:id", VerifyFbToken, async (req, res) => {
   try {
     const { email } = req.query;
-    if (!email) return res.status(400).send({ message: "email is required" });
+    const { id } = req.params;
 
-    const id = req.params.id;
-
-    const existing = await AllblodDonationRequest.findOne({ _id: new ObjectId(id) });
-    if (!existing) return res.status(404).send({ message: "Request not found" });
-
-    if (String(existing.requesterEmail).toLowerCase() !== String(email).toLowerCase()) {
-      return res.status(403).send({ message: "Not allowed" });
+    // 1) email required
+    if (!email) {
+      return res.status(400).send({ message: "email is required" });
     }
 
+    // 2) token email must match query email
+    if (String(email).toLowerCase() !== String(req.decoded_email).toLowerCase()) {
+      return res.status(403).send({
+        message: "Forbidden access: You are not allowed to access this resource.",
+      });
+    }
+
+    // 3) validate id
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid request ID" });
+    }
+
+    // 4) find existing request
+    const query = { _id: new ObjectId(id) };
+    const existing = await AllblodDonationRequest.findOne(query);
+
+    if (!existing) {
+      return res.status(404).send({ message: "Request not found" });
+    }
+
+    // 5) ensure owner
+    if (
+      String(existing.requesterEmail || "").toLowerCase() !==
+      String(email).toLowerCase()
+    ) {
+      return res.status(403).send({ message: "Forbidden: Not allowed" });
+    }
+
+    // 6) only pending can delete
     if (String(existing.status || "").toLowerCase() !== "pending") {
       return res.status(400).send({ message: "Only pending requests can be deleted" });
     }
 
-    const result = await AllblodDonationRequest.deleteOne({ _id: new ObjectId(id) });
-    res.send(result);
+    // 7) delete
+    const result = await AllblodDonationRequest.deleteOne(query);
+
+    res.send({ success: true, result });
   } catch (error) {
+    console.error("DELETE /my-blood-donation-requests/:id error:", error);
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+
+
+
+
+
+app.get("/blood-donation-requests",VerifyFbToken, async (req, res) => {
+  try {
+    const {
+      status = "",
+      bloodGroup = "",
+      search = "",
+      page = "1",
+      limit = "10",
+    } = req.query;
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
+    const skip = (pageNum - 1) * limitNum;
+
+    const filter = {};
+
+    // ✅ status filter
+    if (status) filter.status = status;
+
+    // ✅ blood filter
+    if (bloodGroup) filter.bloodGroup = bloodGroup;
+
+    // ✅ search (regex)
+    if (search) {
+      const rx = new RegExp(search, "i");
+      filter.$or = [
+        { requesterName: rx },
+        { requesterEmail: rx },
+        { recipientName: rx },
+        { recipientDistrict: rx },
+        { recipientUpazila: rx },
+        { hospitalName: rx },
+      ];
+    }
+
+    const total = await AllblodDonationRequest.countDocuments(filter);
+
+    const result = await AllblodDonationRequest
+      .find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .toArray();
+
+    const totalPages = Math.max(Math.ceil(total / limitNum), 1);
+
+    res.send({ result, total, page: pageNum, totalPages });
+  } catch (error) {
+    console.error("GET /blood-donation-requests error:", error);
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+
+/* ==========================
+   PATCH: /blood-donation-requests/:id/status
+   Admin Only (no middleware)
+   Header must have: x-user-email
+   Body: { status: "done" | "cancelled" }
+   Rule: only if current status === "inprogress"
+========================== */
+app.patch("/blood-donation-requests/:id/status",VerifyFbToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rawStatus = req.body?.status;
+
+    // ✅ read admin email from header
+    const email = req.headers["x-user-email"];
+    if (!email) {
+      return res.status(401).send({
+        success: false,
+        message: "Unauthorized: missing x-user-email header",
+      });
+    }
+
+    // ✅ verify admin from DB
+    const adminUser = await allRegisteredDonorInfoCollection.findOne({ email });
+    if (!adminUser) {
+      return res.status(401).send({
+        success: false,
+        message: "Unauthorized: user not found",
+      });
+    }
+
+    if (adminUser.role !== "admin") {
+      return res.status(403).send({
+        success: false,
+        message: "Forbidden: only admin can update status",
+      });
+    }
+
+    // ✅ validate id
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid request ID",
+      });
+    }
+
+    // ✅ validate status
+    const nextStatus = String(rawStatus || "").trim().toLowerCase();
+    const allowed = ["done", "cancelled"];
+    if (!allowed.includes(nextStatus)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid status. Allowed: done, cancelled",
+      });
+    }
+
+    const query = { _id: new ObjectId(id) };
+
+    // ✅ find request
+    const request = await AllblodDonationRequest.findOne(query);
+    if (!request) {
+      return res.status(404).send({
+        success: false,
+        message: "Blood donation request not found",
+      });
+    }
+
+    // ✅ rule: only inprogress -> done/cancelled
+    if (request.status !== "inprogress") {
+      return res.status(400).send({
+        success: false,
+        message: "Only inprogress requests can be marked done/cancelled",
+      });
+    }
+
+    const updateDoc = {
+      $set: {
+        status: nextStatus,
+        updatedAt: new Date(),
+        updatedBy: email,
+      },
+    };
+
+    if (nextStatus === "done") updateDoc.$set.completedAt = new Date();
+    if (nextStatus === "cancelled") updateDoc.$set.cancelledAt = new Date();
+
+    const result = await AllblodDonationRequest.updateOne(query, updateDoc);
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({
+        success: false,
+        message: "Request not found",
+      });
+    }
+
+    const updatedRequest = await AllblodDonationRequest.findOne(query);
+
+    return res.send({
+      success: true,
+      message: `Request ${nextStatus} successfully`,
+      request: updatedRequest,
+    });
+  } catch (error) {
+    console.error("PATCH /blood-donation-requests/:id/status error:", error);
+    res.status(500).send({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+});
+
+
+app.patch("/blood-donation-requests-updateData/:id", VerifyFbToken, async (req, res) => {
+  try {
+    const email = req.decoded_email;
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid request ID" });
+    }
+
+    const existing = await AllblodDonationRequest.findOne({ _id: new ObjectId(id) });
+    if (!existing) {
+      return res.status(404).send({ message: "Request not found" });
+    }
+
+    if (String(existing.requesterEmail || "").toLowerCase() !== email) {
+      return res.status(403).send({ message: "Forbidden: Not allowed" });
+    }
+
+    if (String(existing.status || "").toLowerCase() !== "pending") {
+      return res.status(400).send({ message: "Only pending requests can be edited" });
+    }
+
+    const b = req.body || {};
+
+    const requiredFields = [
+      "recipientName",
+      "recipientDistrict",
+      "recipientUpazila",
+      "hospitalName",
+      "fullAddress",
+      "bloodGroup",
+      "donationDate",
+      "donationTime",
+      "requestMessage",
+    ];
+
+    const missing = requiredFields.filter((f) => !String(b[f] || "").trim());
+    if (missing.length) {
+      return res.status(400).send({
+        message: `Missing required fields: ${missing.join(", ")}`,
+      });
+    }
+
+    const allowedBloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+    if (!allowedBloodGroups.includes(String(b.bloodGroup).trim())) {
+      return res.status(400).send({ message: "Invalid blood group" });
+    }
+
+    if (String(b.requestMessage).trim().length < 10) {
+      return res.status(400).send({ message: "Write at least 10 characters" });
+    }
+
+    const updateDoc = {
+      $set: {
+        requesterEmail: email, // enforce from token
+        requesterName: String(b.requesterName || existing.requesterName || "").trim(),
+        recipientName: String(b.recipientName).trim(),
+        recipientDistrict: String(b.recipientDistrict).trim(),
+        recipientUpazila: String(b.recipientUpazila).trim(),
+        hospitalName: String(b.hospitalName).trim(),
+        fullAddress: String(b.fullAddress).trim(),
+        bloodGroup: String(b.bloodGroup).trim(),
+        donationDate: String(b.donationDate).trim(),
+        donationTime: String(b.donationTime).trim(),
+        requestMessage: String(b.requestMessage).trim(),
+        updatedAt: new Date(),
+      },
+    };
+
+    const result = await AllblodDonationRequest.updateOne(
+      { _id: new ObjectId(id) },
+      updateDoc
+    );
+
+    res.send({ success: true, result });
+  } catch (error) {
+    console.error("PATCH /blood-donation-requests-updateData/:id error:", error);
     res.status(500).send({ message: "Server error", error: error.message });
   }
 });
@@ -611,7 +972,14 @@ app.delete("/my-blood-donation-requests/:id", async (req, res) => {
 
 
 
-app.get("/latest-3-my-blood-donation-requests", async (req, res) => {
+
+
+
+
+
+
+
+app.get("/latest-3-my-blood-donation-requests",VerifyFbToken, async (req, res) => {
   try {
     const { email } = req.query;
     if (!email) return res.status(400).send({ message: "email is required" });
@@ -628,11 +996,11 @@ app.get("/latest-3-my-blood-donation-requests", async (req, res) => {
   }
 });
 
-app.get("/my-blood-donation-requests", async (req, res) => {
+app.get("/my-blood-donation-requests",VerifyFbToken, async (req, res) => {
   try {
     const { email, status = "pending", search = "", page = 1, limit = 10 } = req.query;
     if (!email) return res.status(400).send({ message: "email is required" });
-
+     
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.max(1, parseInt(limit, 10) || 10);
     const skip = (pageNum - 1) * limitNum;
@@ -727,7 +1095,7 @@ app.patch("/my-blood-donation-requests/:id", async (req, res) => {
     res.status(500).send({ message: "Server error", error: error.message });
   }
 });
-app.delete("/my-blood-donation-requests/:id", async (req, res) => {
+app.delete("/my-blood-donation-requests/:id",VerifyFbToken, async (req, res) => {
   try {
     const id = req.params.id;
     const { email } = req.query;
