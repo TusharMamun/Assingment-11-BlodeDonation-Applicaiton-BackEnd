@@ -69,87 +69,202 @@ const db = client.db("Blood_Donation_Application_DB")
 // All colleciton of mongodb
 const allRegisteredDonorInfoCollection = db.collection("allRegisteredDonorInfo")
 const AllblodDonationRequest = db.collection("BlodeDonationRequest")
+const FundingCollection = db.collection("TotalFundingAmount")
 
 // allRegisteredDonorInfo Api
-  app.post("/create-checkout-session", async (req, res) => {
-    try {
-      const { name = "Anonymous", email, amount } = req.body;
+app.post("/create-checkout-session", async (req, res) => {
+  try {
+    const { name = "Anonymous", email, amount } = req.body;
 
-      const parsedAmount = Number(amount);
-      if (!email) return res.status(400).json({ message: "Email is required" });
-      if (!Number.isFinite(parsedAmount) || parsedAmount < 1) {
-        return res.status(400).json({ message: "Amount must be at least 1" });
-      }
-
-      const session = await stripe.checkout.sessions.create({
-        mode: "payment",
-        customer_email: email,
-        line_items: [
-          {
-            price_data: {
-              currency: "usd", // change to "bdt" if needed
-              product_data: { name: "Funding / Donation" },
-              unit_amount: Math.round(parsedAmount * 100),
-            },
-            quantity: 1,
-          },
-        ],
-        metadata: {
-          donor_name: name,
-          donor_email: email,
-          amount_display: String(parsedAmount),
-        },
-        success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancel`,
-      });
-
-      res.status(200).json({ url: session.url });
-    } catch (err) {
-      console.error("Stripe error:", err);
-      res.status(500).json({ message: err?.message || "Failed to create session" });
+    const parsedAmount = Number(amount);
+    if (!email) return res.status(400).json({ message: "Email is required" });
+    if (!Number.isFinite(parsedAmount) || parsedAmount < 1) {
+      return res.status(400).json({ message: "Amount must be at least 1" });
     }
-  });
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      customer_email: email,
+      line_items: [
+        {
+          price_data: {
+            currency: "usd", // change to "bdt" if needed
+            product_data: { name: "Funding / Donation" },
+            unit_amount: Math.round(parsedAmount * 100),
+          },
+          quantity: 1,
+        },
+      ],
+      metadata: {
+        donor_name: name,
+        donor_email: email,
+        amount_display: String(parsedAmount),
+      },
+      success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancel`,
+    });
+
+    res.status(200).json({ url: session.url });
+  } catch (err) {
+    console.error("Stripe error:", err);
+    res.status(500).json({ message: err?.message || "Failed to create session" });
+  }
+});
 
   // ✅ Verify session (GET) -> used by PaymentSuccess page
-  app.get("/checkout-session/:sessionId", async (req, res) => {
-    try {
-      const session = await stripe.checkout.sessions.retrieve(req.params.sessionId);
+app.get("/checkout-session/:sessionId", async (req, res) => {
+  try {
+    const session = await stripe.checkout.sessions.retrieve(req.params.sessionId);
 
-  res.send({
-      id: session.id,                         // cs_test_...
-      payment_intent: session.payment_intent, // ✅ pi_...
+    res.send({
+      id: session.id,
+      payment_intent: session.payment_intent,
       payment_status: session.payment_status,
       amount_total: session.amount_total,
       currency: session.currency,
       customer_email: session.customer_email,
       metadata: session.metadata,
     });
-    } catch (err) {
-      console.error("Stripe retrieve session error:", err);
-      res.status(500).send({ message: err?.message || "Failed to retrieve session" });
-    }
-  });
+  } catch (err) {
+    console.error("Stripe retrieve session error:", err);
+    res.status(500).send({ message: err?.message || "Failed to retrieve session" });
+  }
+});
 
   // ✅ Optional: mark payment success (PATCH) for DB update
-  app.patch("/payment-success", async (req, res) => {
-    try {
-      const sessionId = req.query.session_id;
-      if (!sessionId) return res.status(400).send({ message: "session_id required" });
+app.patch("/payment-success", async (req, res) => {
+  try {
+    const sessionId = req.query.session_id;
+    if (!sessionId) return res.status(400).send({ message: "session_id required" });
 
-      const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-      if (session.payment_status !== "paid") {
-        return res.status(400).send({ message: "Payment not completed yet" });
-      }
-
-   
-
-      res.send({ success: true });
-    } catch (err) {
-      console.error("Payment success patch error:", err);
-      res.status(500).send({ message: err?.message || "Server error" });
+    if (session.payment_status !== "paid") {
+      return res.status(400).send({ message: "Payment not completed yet" });
     }
-  });
+
+    // ✅ prevent duplicates
+    const already = await FundingCollection.findOne({ sessionId: session.id });
+    if (already) return res.send({ success: true, message: "Already saved" });
+
+    const amount = (session.amount_total || 0) / 100;
+
+    const fundingDoc = {
+      sessionId: session.id,
+      paymentIntent: session.payment_intent,
+      donorName: session.metadata?.donor_name || "Anonymous",
+      donorEmail: session.customer_email || session.metadata?.donor_email || "",
+      amount,
+      currency: session.currency,
+      paidAt: new Date(),
+      paymentStatus: session.payment_status,
+    };
+
+    await FundingCollection.insertOne(fundingDoc);
+
+    res.send({ success: true });
+  } catch (err) {
+    console.error("Payment success patch error:", err);
+    res.status(500).send({ message: err?.message || "Server error" });
+  }
+});
+
+app.get("/my-fundings", async (req, res) => {
+  try {
+    const email = (req.query.email || "").trim();
+    if (!email) return res.status(400).send({ message: "email required" });
+
+    const fundings = await FundingCollection
+      .find({ donorEmail: email })
+      .sort({ paidAt: -1 })
+      .toArray();
+
+    const totalAgg = await FundingCollection
+      .aggregate([
+        { $match: { donorEmail: email } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ])
+      .toArray();
+
+    const total = totalAgg?.[0]?.total || 0;
+
+    res.send({ fundings, total });
+  } catch (err) {
+    res.status(500).send({ message: err?.message || "Server error" });
+  }
+});
+app.get("/all-fundings", VerifyFbToken, async (req, res) => {
+  try {
+    const page = Math.max(parseInt(req.query.page || "1", 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || "10", 10), 1), 50);
+    const skip = (page - 1) * limit;
+
+    const search = (req.query.search || "").trim();
+
+    const filter = {};
+    if (search) {
+      const regex = new RegExp(search, "i");
+      filter.$or = [
+        { donorName: regex },
+        { donorEmail: regex },
+        { sessionId: regex },
+        { paymentIntent: regex },
+        { paymentStatus: regex },
+        { currency: regex },
+      ];
+    }
+
+    const [fundings, totalCount, totalAgg] = await Promise.all([
+      FundingCollection.find(filter)
+        .sort({ paidAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray(),
+
+      FundingCollection.countDocuments(filter),
+
+      FundingCollection.aggregate([
+        { $match: filter },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]).toArray(),
+    ]);
+
+    const total = totalAgg?.[0]?.total || 0;
+
+    res.send({
+      fundings,
+      total,
+      totalCount,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(totalCount / limit)),
+    });
+  } catch (err) {
+    console.error("All fundings error:", err);
+    res.status(500).send({ message: err?.message || "Server error" });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1162,6 +1277,54 @@ app.patch("/my-blood-donation-requests/:id/status", async (req, res) => {
     res.status(500).send({ message: "Server error", error: error.message });
   }
 });
+
+
+// search Doner apis
+app.get("/search-pending-requests", async (req, res) => {
+  try {
+    const {
+      district = "",
+      upazila = "",
+      bloodGroup = "",
+      page = "1",
+      limit = "10",
+    } = req.query;
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
+    const skip = (pageNum - 1) * limitNum;
+
+    // ✅ Always pending
+    const filter = { status: "pending" };
+
+    // ✅ optional filters (only apply if user selects)
+    if (district) filter.recipientDistrict = String(district).trim();
+    if (upazila) filter.recipientUpazila = String(upazila).trim();
+    if (bloodGroup) filter.bloodGroup = String(bloodGroup).trim();
+
+    const [result, total] = await Promise.all([
+      AllblodDonationRequest.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .toArray(),
+      AllblodDonationRequest.countDocuments(filter),
+    ]);
+
+    res.send({
+      result,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.max(1, Math.ceil(total / limitNum)),
+    });
+  } catch (error) {
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+
+
+
 
 
 
