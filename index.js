@@ -29,13 +29,10 @@ try {
 const idToken = token.split(' ')[1];
 const decoded = await admin.auth().verifyIdToken(idToken)
 req.decoded_email = decoded.email
-console.log(decoded)
+
 } catch (error) {
   return res.status(401).send({message:"Unauthorized access"})
 }
-
-
-
 
 
 next()
@@ -70,6 +67,88 @@ const db = client.db("Blood_Donation_Application_DB")
 const allRegisteredDonorInfoCollection = db.collection("allRegisteredDonorInfo")
 const AllblodDonationRequest = db.collection("BlodeDonationRequest")
 const FundingCollection = db.collection("TotalFundingAmount")
+
+
+const VeryfyAdmin = async(req,res,next)=>{
+  const email = req.decoded_email;
+  const query ={email};
+  const user =await allRegisteredDonorInfoCollection.findOne(query);
+  if(!user || user.role !=="admin" ){
+    return  res.status(403).send({message:"forbidden acess"})
+  }
+  next()
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// inside database Midelwear
+// const VeryfyAdmin =async(req,res,next)=>{
+//   const email = req.decoded_email;
+
+
+//   const query = {email}
+//   const usr =await allRegisteredDonorInfoCollection.findOne(query);
+//   if(!usr || usr.role !=="admin"){
+//     return res.status(403).send({message:"Forbidden acess"})
+//   }
+//   next()
+
+// }
+// const VerifyVolunteer =async(req,res,next)=>{
+//   const email = req.decoded_email;
+//   const query = {email}
+//   const usr =await allRegisteredDonorInfoCollection.findOne(query);
+//   if(!usr || usr.role !=="volunteer"){
+//     return res.status(403).send({message:"Forbidden acess"})
+//   }
+//   next()
+
+// }
+// const VeryfiDonor =async(req,res,next)=>{
+//   const email = req.decoded_email;
+//   const query = {email}
+//   const usr =await allRegisteredDonorInfoCollection.findOne(query);
+//   if(!usr || usr.role !=="donor"){
+//     return res.status(403).send({message:"Forbidden acess"})
+//   }
+//   next()
+
+// }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // allRegisteredDonorInfo Api
 app.post("/create-checkout-session", async (req, res) => {
@@ -169,7 +248,7 @@ app.patch("/payment-success", async (req, res) => {
   }
 });
 
-app.get("/my-fundings", async (req, res) => {
+app.get("/my-fundings", VerifyFbToken,async (req, res) => {
   try {
     const email = (req.query.email || "").trim();
     if (!email) return res.status(400).send({ message: "email required" });
@@ -193,7 +272,7 @@ app.get("/my-fundings", async (req, res) => {
     res.status(500).send({ message: err?.message || "Server error" });
   }
 });
-app.get("/all-fundings", VerifyFbToken, async (req, res) => {
+app.get("/all-fundings", VerifyFbToken,VeryfyAdmin, async (req, res) => {
   try {
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit || "10", 10), 1), 50);
@@ -244,31 +323,6 @@ app.get("/all-fundings", VerifyFbToken, async (req, res) => {
     res.status(500).send({ message: err?.message || "Server error" });
   }
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -361,7 +415,7 @@ app.post("/CreatedBloadDonation", async (req, res) => {
 
 
 // get All request data  FOR PENDIN REQUEST
-app.get("/donation-requests",VerifyFbToken, async (req, res) => {
+app.get("/donation-requests", async (req, res) => {
 // console.log(req.headers)
   try {
     const { status } = req.query;
@@ -443,11 +497,90 @@ app.get("/blood-donation-requests-details/:id",VerifyFbToken, async (req, res) =
 });
 
 
+
+
+
+
+
+
+
+
 app.post('/regesterDoner',async(req,res)=>{
 const userInfo = req.body;
 const result = await allRegisteredDonorInfoCollection.insertOne(userInfo)
 res.send(result)
 })
+app.get('/regesterDoner/:email/role',async (req,res)=>{
+  const email = req.params.email;
+const query ={email }
+const result = await allRegisteredDonorInfoCollection.findOne(query)
+res.send({role: result.role || "donor"})
+})
+
+
+// ✅ Analytics: donation request status summary
+// GET /analysyseData
+// returns: { pending, inprogress, done, cancelled, total }
+
+app.get("/analysyseData", VerifyFbToken, async (req, res) => {
+  try {
+    // ✅ Optional: Only admin/volunteer can see analytics
+    // If you want everyone logged in to see, remove this block
+    const email = req.decoded_email;
+
+    const dbUser = await allRegisteredDonorInfoCollection.findOne({ email });
+    if (!dbUser) {
+      return res.status(401).send({ message: "Unauthorized: user not found" });
+    }
+
+    const allowedRoles = ["admin", "volunteer"];
+    if (!allowedRoles.includes(dbUser.role)) {
+      return res.status(403).send({ message: "Forbidden: only admin/volunteer" });
+    }
+
+    // ✅ group by status
+    const result = await AllblodDonationRequest
+      .aggregate([
+        {
+          $group: {
+            _id: { $toLower: "$status" },
+            count: { $sum: 1 },
+          },
+        },
+      ])
+      .toArray();
+
+    // ✅ map to object
+    const map = {};
+    for (const r of result) {
+      map[r._id] = r.count;
+    }
+
+    // ✅ normalize keys (your frontend expects these)
+    const pending = map.pending || 0;
+    const inprogress = map.inprogress || 0;
+    const done = map.done || 0;
+
+    // you used "cancelled" in frontend (double L)
+    // some code uses "canceled" (single L) – support both
+    const cancelled = (map.cancelled || 0) + (map.canceled || 0);
+
+    const total = pending + inprogress + done + cancelled;
+
+    res.send({ pending, inprogress, done, cancelled, total });
+  } catch (error) {
+    console.error("GET /analysyseData error:", error);
+    res.status(500).send({ message: "Server error", error: error.message });
+  }
+});
+
+
+
+
+
+
+
+
 // get all  user
 app.get("/regesterDoner",VerifyFbToken, async (req, res) => {
   try {
@@ -567,7 +700,7 @@ app.put("/update/profile", VerifyFbToken,async (req, res) => {
 // getUserRoll 
 
 
-app.get('/regesterDoner/role/:email', async(req,res)=>{
+app.get('/regesterDoner/role/:email', VerifyFbToken, async(req,res)=>{
   const email = req.params.email
   const result =await allRegisteredDonorInfoCollection.findOne({email})
 res.send(({role:result?.role}))
@@ -576,7 +709,7 @@ res.send(({role:result?.role}))
 
 
 
-app.patch("/users/:id/role", async (req, res) => {
+app.patch("/users/:id/role",VerifyFbToken,VeryfyAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { role } = req.body; // donor | volunteer | admin
@@ -635,7 +768,7 @@ app.patch("/users/:id/status", async (req, res) => {
 // Mydonation for my donation page
 
 
-app.get("/donation-requests/:id", async (req, res) => {
+app.get("/donation-requests/:id",VerifyFbToken, async (req, res) => {
   try {
     const doc = await AllblodDonationRequest.findOne({ _id: new ObjectId(req.params.id) });
     if (!doc) return res.status(404).send({ message: "Request not found" });
@@ -706,6 +839,9 @@ app.get("/donation-requests/:id",VerifyFbToken, async (req, res) => {
     res.status(500).send({ message: "Server error", error: error.message });
   }
 });
+
+// donor rle
+ 
 app.patch("/my-blood-donation-requests/:id", VerifyFbToken, async (req, res) => {
   try {
     const { email } = req.query;
@@ -894,12 +1030,12 @@ app.get("/blood-donation-requests",VerifyFbToken, async (req, res) => {
    Body: { status: "done" | "cancelled" }
    Rule: only if current status === "inprogress"
 ========================== */
-app.patch("/blood-donation-requests/:id/status",VerifyFbToken, async (req, res) => {
+app.patch("/blood-donation-requests/:id/status", VerifyFbToken, async (req, res) => {
   try {
     const { id } = req.params;
     const rawStatus = req.body?.status;
 
-    // ✅ read admin email from header
+    // ✅ read user email from header
     const email = req.headers["x-user-email"];
     if (!email) {
       return res.status(401).send({
@@ -908,19 +1044,21 @@ app.patch("/blood-donation-requests/:id/status",VerifyFbToken, async (req, res) 
       });
     }
 
-    // ✅ verify admin from DB
-    const adminUser = await allRegisteredDonorInfoCollection.findOne({ email });
-    if (!adminUser) {
+    // ✅ verify user from DB
+    const dbUser = await allRegisteredDonorInfoCollection.findOne({ email });
+    if (!dbUser) {
       return res.status(401).send({
         success: false,
         message: "Unauthorized: user not found",
       });
     }
 
-    if (adminUser.role !== "admin") {
+    // ✅ permission: admin OR volunteer
+    const allowedRoles = ["admin", "volunteer"];
+    if (!allowedRoles.includes(dbUser.role)) {
       return res.status(403).send({
         success: false,
-        message: "Forbidden: only admin can update status",
+        message: "Forbidden: only admin or volunteer can update status",
       });
     }
 
@@ -966,6 +1104,7 @@ app.patch("/blood-donation-requests/:id/status",VerifyFbToken, async (req, res) 
         status: nextStatus,
         updatedAt: new Date(),
         updatedBy: email,
+        updatedByRole: dbUser.role, // ✅ optional (audit)
       },
     };
 
@@ -997,6 +1136,7 @@ app.patch("/blood-donation-requests/:id/status",VerifyFbToken, async (req, res) 
     });
   }
 });
+
 
 
 app.patch("/blood-donation-requests-updateData/:id", VerifyFbToken, async (req, res) => {
