@@ -190,7 +190,7 @@ app.post("/create-checkout-session", async (req, res) => {
   }
 });
 
-  // ✅ Verify session (GET) -> used by PaymentSuccess page
+  // ✅ Verify session (GET) -> use
 app.get("/checkout-session/:sessionId", async (req, res) => {
   try {
     const session = await stripe.checkout.sessions.retrieve(req.params.sessionId);
