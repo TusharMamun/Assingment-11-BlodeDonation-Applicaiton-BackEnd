@@ -7,7 +7,13 @@ const port = process.env.PORT || 5000;
 const app = express();
 const stripe = require("stripe")(process.env.STRIP_SECRET_KEY);
 const admin = require("firebase-admin");
-const serviceAccount =require("./firabaseSkd.json")
+
+
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+const serviceAccount = JSON.parse(decoded);
+
+
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
@@ -1472,9 +1478,9 @@ app.get("/search-pending-requests", async (req, res) => {
 
 
 
-    // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    // // Send a ping to confirm a successful connection
+
+
   } finally {
     // Ensures that the client will close when you finish/error
 

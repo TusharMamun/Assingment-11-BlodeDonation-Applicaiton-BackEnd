@@ -8,3 +8,4 @@ node_modules/
 # firebase/admin sdk key
 firabaseSkd.json/
 firabaseSkd.json
+.vercel
