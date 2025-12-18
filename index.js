@@ -66,10 +66,10 @@ const client = new MongoClient(uri, {
 });
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+
+    
 const db = client.db("Blood_Donation_Application_DB")
-// All colleciton of mongodb
+
 const allRegisteredDonorInfoCollection = db.collection("allRegisteredDonorInfo")
 const AllblodDonationRequest = db.collection("BlodeDonationRequest")
 const FundingCollection = db.collection("TotalFundingAmount")
@@ -102,39 +102,6 @@ const VeryfyAdmin = async(req,res,next)=>{
 
 
 
-// inside database Midelwear
-// const VeryfyAdmin =async(req,res,next)=>{
-//   const email = req.decoded_email;
-
-
-//   const query = {email}
-//   const usr =await allRegisteredDonorInfoCollection.findOne(query);
-//   if(!usr || usr.role !=="admin"){
-//     return res.status(403).send({message:"Forbidden acess"})
-//   }
-//   next()
-
-// }
-// const VerifyVolunteer =async(req,res,next)=>{
-//   const email = req.decoded_email;
-//   const query = {email}
-//   const usr =await allRegisteredDonorInfoCollection.findOne(query);
-//   if(!usr || usr.role !=="volunteer"){
-//     return res.status(403).send({message:"Forbidden acess"})
-//   }
-//   next()
-
-// }
-// const VeryfiDonor =async(req,res,next)=>{
-//   const email = req.decoded_email;
-//   const query = {email}
-//   const usr =await allRegisteredDonorInfoCollection.findOne(query);
-//   if(!usr || usr.role !=="donor"){
-//     return res.status(403).send({message:"Forbidden acess"})
-//   }
-//   next()
-
-// }
 
 
 
@@ -155,8 +122,6 @@ const VeryfyAdmin = async(req,res,next)=>{
 
 
 
-
-// allRegisteredDonorInfo Api
 app.post("/create-checkout-session", async (req, res) => {
   try {
     const { name = "Anonymous", email, amount } = req.body;
@@ -196,7 +161,7 @@ app.post("/create-checkout-session", async (req, res) => {
   }
 });
 
-  // ✅ Verify session (GET) -> use
+
 app.get("/checkout-session/:sessionId", async (req, res) => {
   try {
     const session = await stripe.checkout.sessions.retrieve(req.params.sessionId);
@@ -216,7 +181,6 @@ app.get("/checkout-session/:sessionId", async (req, res) => {
   }
 });
 
-  // ✅ Optional: mark payment success (PATCH) for DB update
 app.patch("/payment-success", async (req, res) => {
   try {
     const sessionId = req.query.session_id;
